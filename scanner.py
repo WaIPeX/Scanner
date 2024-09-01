@@ -74,3 +74,43 @@ if os.name == "nt":
     socket_protocol = socket.IPPROTO_IP #win sock
 else:
     socket_protocol = socket.IPPROTO_ICMP #unx sock
+sniffer = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket_protocol)
+
+sniffer.bind(("0.0.0.0", 6677)) # Example, could be ...(host, port)
+
+sniffer.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+
+# if we're on Windows we need to send IOCTL to send promiscuos mode
+if os.name == "nt":
+    sniffer.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+
+# start sending packets
+t = threading.Thread(target=udp_sender, args=(tgt_subnet, tgt_message))
+t.start()
+
+try:
+    while True:
+        raw_buffer = sniffer.recvfrom(65535)[0] # single b
+
+        ip_header = IP(raw_buffer[:20]) 
+
+        print(f"Protocol: {ip_header.protocol}, {ip_header.src_address} -> {ip_header.dst_address}")
+
+        if ip_header.protocol == "ICMP": # self expl, look for firt if icmmp
+            offset = ip_header.ihl * 4 
+            buf = raw_buffer[offset:offset + ctypes.sizeof(ICMP)]
+
+            icmp_header = ICMP(buf)
+
+            print(f"ICMP -> Type: {icmp_header.type}, {icmp_header.code}")
+
+
+            if icmp_header.code == 3 and icmp_header.type == 3: # Check Code & Type 3 host ok no port
+
+                if ip_address(ip_header.src_address) in ip_network(tgt_subnet):
+                    if raw_buffer[len(raw_buffer)- len(tgt_message):] == tgt_message:
+                        print(f"Host Up: {ip_header.src_address}")
+
+except KeyboardInterrupt:
+    if os.name == "nt":
+        sniffer.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
